@@ -1,3 +1,10 @@
+```
+git checkout rlblocks
+DISPLAY=:0 ./isaaclab.sh -p source/standalone/environments/rlblocks_agent.py --task Isaac-Humanoid-v0 --num_envs 500 --headless --enable_cameras
+```
+
+---
+
 ![Isaac Lab](docs/source/_static/isaaclab.jpg)
 
 ---
