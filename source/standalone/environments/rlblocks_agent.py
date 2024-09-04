@@ -7,8 +7,14 @@
 
 """Launch Isaac Sim Simulator first."""
 
+import os
+
+from rlblocks.data.rollout_buffer import RolloutBuffer
+os.environ["OMP_NUM_THREADS"] = "1"
+
 import argparse
 import time
+from typing import Dict
 from rlblocks.data_collection.exploration import NormalExplorationTorch
 from rlblocks.model.cat_encoder import CatStateEncoder
 import torch as t
@@ -41,7 +47,6 @@ simulation_app = app_launcher.app
 
 import gymnasium as gym
 import torch
-import numpy as np
 
 import omni.isaac.lab_tasks  # noqa: F401
 from omni.isaac.lab_tasks.utils import parse_env_cfg
@@ -63,8 +68,8 @@ def main():
 
     env = gym.wrappers.RecordVideo(
         env,
-        video_folder='/home/anton/devel/rlblocks/logs/humanoid-isaac-lab/humanoid-3/video',
-        step_trigger=lambda step: step % 2000 == 0,
+        video_folder='/home/anton/devel/rlblocks/logs/humanoid-isaac-lab/humanoid-13/video',
+        step_trigger=lambda step: step % 3000 == 0,
         video_length=400,
     )
 
@@ -73,8 +78,8 @@ def main():
     state_len = sum([val.shape[1] for val in env.observation_space.values()])
     action_len = env.action_space.shape[1]
     cat_state_encoder = CatStateEncoder(['policy'])
-    action_min = -4
-    action_max = 4
+    action_min = -1.5
+    action_max = 1.5
     actor = MLPGaussianActor(
         model=MLP(
             input_size=state_len,
@@ -82,7 +87,7 @@ def main():
             layers_num=2,
             layer_size=256,
             batch_norm=True,
-            scale_last_layer=0.1,
+            scale_last_layer=0.01,
         ),
         action_min=t.tensor(action_min).to(device),
         action_max=t.tensor(action_max).to(device),
@@ -95,27 +100,16 @@ def main():
     states, infos = env.reset()
 
     # Prepare storage for episodes
-    episode_states = [{} for _ in range(num_envs)]
-    episode_actions = [[] for _ in range(num_envs)]
-    episode_rewards = [[] for _ in range(num_envs)]
-    # episode_infos = [[] for _ in range(num_envs)]
-
-    # Initialize state storage for each key in the dict
-    for i in range(num_envs):
-        for key in states.keys():
-            episode_states[i][key] = []
-
-        for key, value in states.items():
-            episode_states[i][key].append(value[i].cpu().numpy())
-
-    ep_id = 0
+    rollout_buffer = RolloutBuffer(args_cli.num_envs)
+    rollout_buffer.store_first_obs(states)
 
     server = ZMQRolloutServer(address="127.0.0.1", port=5555)
     server.start()
 
     expl = NormalExplorationTorch(
-        std=0.05,
+        std=0.1,
         action_clip=(action_min, action_max),
+        repeat=1,
     )
 
     # simulate environment
@@ -131,61 +125,64 @@ def main():
 
             for _ in range(request.rollout_len):
 
-                # compute zero actions
-                # actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
-                actions = actor(states)
+                # compute actions
+                actions, info = actor(states, add_info=True)
+                actions[:1] = info['mu'][:1]
                 actions[1:] = expl(actions[1:])
+
                 # apply actions
                 next_states, rewards, terminated, truncated, infos = env.step(actions)
                 # print(f'--- next_states {next_states["policy"].shape}')
                 # print(f'--- terminated \n{terminated}')
 
                 # Record the transitions
-                for i in range(num_envs):
-                    for key, value in next_states.items():
-                        episode_states[i][key].append(value[i].cpu().numpy())
-                    episode_actions[i].append(actions[i].cpu().numpy())
-                    episode_rewards[i].append(rewards[i].cpu().numpy())
-                    # episode_infos[i].append(infos[i])
+                rollout_buffer.store_transitions(
+                    states=next_states,
+                    actions=actions,
+                    rewards=rewards,
+                )
 
                 # Handle termination and truncation
-                for i in range(num_envs):
-                    if terminated[i] or truncated[i]:
-                        # Stack tensors for each key in the states dict
-                        episode_stacked_states = {key: np.stack(episode_states[i][key]) for key in episode_states[i].keys()}
-                        episode_stacked_states['obs'] = episode_stacked_states['policy']
-                        del episode_stacked_states['policy']
+                for ind in range(num_envs):
+                    if terminated[ind] or truncated[ind]:
 
-                        # Convert lists to tensors
-                        episode = Episode(
-                            states=episode_stacked_states,
-                            actions=np.stack(episode_actions[i]),
-                            rewards=np.expand_dims(np.stack(episode_rewards[i]), -1),
-                            done=terminated[i],
-                            truncated=truncated[i],
-                            is_used_exploration=(i != 0),
-                            info={},
-                            id=f'{i}_{ep_id}'
+                        episode = rollout_buffer.get_episode(
+                            ind=ind,
+                            terminated=bool(terminated[ind]),
+                            truncated=bool(truncated[ind]),
+                            is_used_exploration=(ind != 0),
+                            partial=False,
                         )
+                        episode.states['obs'] = episode.states['policy']
+                        del episode.states['policy']
                         rollout_eps.append(episode)
-                        ep_id += 1
-                        # print(episode)
-                        # print(episode.shapes)
-
-                        # Process the episode (e.g., save, analyze, etc.)
-                        # print(f"Processed Episode {episode.id} with length {len(episodes[i][list(episodes[i].keys())[0]])}")
-
-                        # Reset the environment and episode storage for this environment
-                        # reset_state, reset_info = env.reset_at(i)
-                        # states[i] = next_states[i]
-                        episode_states[i] = {key: [] for key in next_states.keys()}
-                        for key, value in next_states.items():
-                            episode_states[i][key].append(value[i].cpu().numpy())
-                        episode_actions[i] = []
-                        episode_rewards[i] = []
-                        # episode_infos[i] = []
+                        rollout_buffer.reset_episode(
+                            ind=ind,
+                            states=next_states,
+                        )
+                        rollout_buffer.inc_ep_ind(ind)
+                        # print(f'--- Done {episode}')
 
                 states = next_states
+
+            # rollout steps ended, send also not finished episodes
+            for ind in range(num_envs):
+                if rollout_buffer.get_episode_len(ind) > 0:
+                    episode = rollout_buffer.get_episode(
+                        ind=ind,
+                        terminated=False,
+                        truncated=False,
+                        is_used_exploration=(ind != 0),
+                        partial=True,
+                    )
+                    episode.states['obs'] = episode.states['policy']
+                    del episode.states['policy']
+                    rollout_eps.append(episode)
+                    rollout_buffer.reset_episode(
+                        ind=ind,
+                        states=next_states,
+                    )
+                    # print(f'---      {episode}')
 
             print(f'--- rollout time {time.time() - t1}')
             server.send_rollout(RolloutResponse(episodes=rollout_eps))
