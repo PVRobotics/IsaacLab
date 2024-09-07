@@ -58,6 +58,12 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
+    env_cfg.decimation = 4  # similar frame skip
+    # env_cfg.energy_cost_scale = 0.05
+    # env_cfg.actions_cost_scale = 0.01
+    # env_cfg.alive_reward_scale = 0.1
+    # env_cfg.dof_vel_scale = 1.
+    env_cfg.rewards.alive.weight = 0.1
     # create environment
     env = gym.make(args_cli.task, render_mode="rgb_array", cfg=env_cfg)
     num_envs = args_cli.num_envs
@@ -68,7 +74,7 @@ def main():
 
     env = gym.wrappers.RecordVideo(
         env,
-        video_folder='/home/anton/devel/rlblocks/logs/humanoid-isaac-lab/humanoid-13/video',
+        video_folder='/home/anton/devel/rlblocks/logs/humanoid-isaac-lab/humanoid-22-3/video',
         step_trigger=lambda step: step % 3000 == 0,
         video_length=400,
     )
@@ -78,8 +84,8 @@ def main():
     state_len = sum([val.shape[1] for val in env.observation_space.values()])
     action_len = env.action_space.shape[1]
     cat_state_encoder = CatStateEncoder(['policy'])
-    action_min = -1.5
-    action_max = 1.5
+    action_min = -1.
+    action_max = 1.
     actor = MLPGaussianActor(
         model=MLP(
             input_size=state_len,
@@ -107,7 +113,7 @@ def main():
     server.start()
 
     expl = NormalExplorationTorch(
-        std=0.1,
+        std=0.2,
         action_clip=(action_min, action_max),
         repeat=1,
     )
@@ -128,10 +134,11 @@ def main():
                 # compute actions
                 actions, info = actor(states, add_info=True)
                 actions[:1] = info['mu'][:1]
-                actions[1:] = expl(actions[1:])
+                actions[1:] = expl(info['mu'][1:])
 
                 # apply actions
                 next_states, rewards, terminated, truncated, infos = env.step(actions)
+
                 # print(f'--- next_states {next_states["policy"].shape}')
                 # print(f'--- terminated \n{terminated}')
 
