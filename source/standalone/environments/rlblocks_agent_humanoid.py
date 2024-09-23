@@ -58,17 +58,12 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
-    # env_cfg.decimation = 6  # similar frame skip
-    # # env_cfg.energy_cost_scale = 0.05
-    # # env_cfg.actions_cost_scale = 0.01
-    # # env_cfg.alive_reward_scale = 0.1
-    # # env_cfg.dof_vel_scale = 1.
-    # env_cfg.rewards.alive.weight = 0.1
-
-    env_cfg.commands.base_velocity.ranges.lin_vel_x = (-1., 2.0)
-    env_cfg.commands.base_velocity.ranges.lin_vel_y = (-2., 2.)
-    env_cfg.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
-
+    env_cfg.decimation = 4  # similar frame skip
+    # env_cfg.energy_cost_scale = 0.05
+    # env_cfg.actions_cost_scale = 0.01
+    # env_cfg.alive_reward_scale = 0.1
+    # env_cfg.dof_vel_scale = 1.
+    env_cfg.rewards.alive.weight = 0.1
     # create environment
     env = gym.make(args_cli.task, render_mode="rgb_array", cfg=env_cfg)
     num_envs = args_cli.num_envs
@@ -79,7 +74,7 @@ def main():
 
     env = gym.wrappers.RecordVideo(
         env,
-        video_folder='/home/anton/devel/rlblocks/logs/humanoid-isaac-lab/h1-flat-1-9/video',
+        video_folder='/home/anton/devel/rlblocks/logs/humanoid-isaac-lab/humanoid-22-3/video',
         step_trigger=lambda step: step % 3000 == 0,
         video_length=400,
     )
@@ -96,7 +91,7 @@ def main():
             input_size=state_len,
             output_size=2 * action_len,
             layers_num=2,
-            layer_size=512,
+            layer_size=256,
             batch_norm=True,
             scale_last_layer=0.01,
         ),
@@ -118,7 +113,7 @@ def main():
     server.start()
 
     expl = NormalExplorationTorch(
-        std=0.3,
+        std=0.2,
         action_clip=(action_min, action_max),
         repeat=1,
     )
@@ -212,6 +207,3 @@ if __name__ == "__main__":
 
 # DISPLAY=:0 ./isaaclab.sh -p source/standalone/environments/rlblocks_agent.py --task Isaac-Humanoid-v0 --num_envs 1000
 # DISPLAY=:0 ./isaaclab.sh -p source/standalone/environments/rlblocks_agent.py --task Isaac-Humanoid-v0 --num_envs 500 --headless --enable_cameras
-# DISPLAY=:0 ./isaaclab.sh -p source/standalone/environments/rlblocks_agent.py --task Isaac-Velocity-Flat-G1-v0 --num_envs 500 --headless --enable_cameras
-# DISPLAY=:0 ./isaaclab.sh -p source/standalone/environments/rlblocks_agent.py --task Isaac-Velocity-Flat-H1-v0 --num_envs 500 --headless --enable_cameras
-
